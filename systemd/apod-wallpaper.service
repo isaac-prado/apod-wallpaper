@@ -1,0 +1,16 @@
+[Unit]
+Description=Define a APOD (NASA Astronomy Picture of the Day) como wallpaper
+# Só faz sentido dentro da sessão gráfica (gsettings precisa do DBus da sessão).
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+# Descomente e coloque sua chave da NASA (https://api.nasa.gov) para evitar o
+# limite baixo do DEMO_KEY:
+# Environment=APOD_API_KEY=SUA_CHAVE_AQUI
+ExecStart=%h/.local/bin/apod-wallpaper.sh
+# Se falhar (ex.: rede lenta), o próprio script já faz retry interno.
+
+[Install]
+WantedBy=graphical-session.target

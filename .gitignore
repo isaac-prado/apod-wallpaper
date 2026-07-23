@@ -1,0 +1,5 @@
+# Imagens baixadas e metadados (gerados em runtime)
+*.jpg
+*.jpeg
+*.png
+last.json
