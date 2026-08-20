@@ -39,31 +39,42 @@ if [ -z "$json" ]; then
   exit 1
 fi
 
-# --- Escolhe a melhor URL de imagem ------------------------------------------
+# --- Monta a lista de URLs candidatas (em ordem de preferência) --------------
+# Algumas vezes a APOD tem hdurl quebrado (404) mas a url normal funciona — por
+# isso tentamos várias em cascata em vez de confiar numa só.
 media_type="$(echo "$json" | jq -r '.media_type // "image"')"
 title="$(echo "$json" | jq -r '.title // "APOD"')"
 
 if [ "$media_type" = "image" ]; then
-  # hdurl quando existir; senão url
-  img_url="$(echo "$json" | jq -r '.hdurl // .url')"
+  candidates="$(echo "$json" | jq -r '[.hdurl, .url] | map(select(. != null and . != "")) | .[]')"
 else
-  # vídeo (ou outro): usa a thumbnail
-  img_url="$(echo "$json" | jq -r '.thumbnail_url // .url')"
+  # vídeo (ou outro): usa a thumbnail, depois a url como último recurso
+  candidates="$(echo "$json" | jq -r '[.thumbnail_url, .url] | map(select(. != null and . != "")) | .[]')"
 fi
 
-if [ -z "$img_url" ] || [ "$img_url" = "null" ]; then
+if [ -z "$candidates" ]; then
   log "falhou: JSON sem URL de imagem utilizável. Mantendo wallpaper atual."
   exit 1
 fi
 
-# --- Baixa a imagem ----------------------------------------------------------
+# --- Baixa a imagem (tenta cada candidata até uma funcionar) -----------------
 date_str="$(echo "$json" | jq -r '.date // ""')"
-ext="${img_url##*.}"; ext="${ext%%\?*}"
-[ "${#ext}" -le 4 ] || ext="jpg"
-out="$DEST_DIR/apod-${date_str:-latest}.${ext}"
+out=""
+while IFS= read -r img_url; do
+  [ -n "$img_url" ] || continue
+  ext="${img_url##*.}"; ext="${ext%%\?*}"
+  [ "${#ext}" -le 4 ] || ext="jpg"
+  candidate_out="$DEST_DIR/apod-${date_str:-latest}.${ext}"
+  if curl -fsSL --max-time 120 -o "$candidate_out" "$img_url"; then
+    out="$candidate_out"
+    log "imagem baixada de: $img_url"
+    break
+  fi
+  log "URL falhou ($img_url), tentando próxima..."
+done <<< "$candidates"
 
-if ! curl -fsSL --max-time 120 -o "$out" "$img_url"; then
-  log "falhou: não consegui baixar a imagem. Mantendo wallpaper atual."
+if [ -z "$out" ]; then
+  log "falhou: nenhuma URL de imagem funcionou. Mantendo wallpaper atual."
   exit 1
 fi
 
