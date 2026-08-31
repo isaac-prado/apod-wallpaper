@@ -15,13 +15,19 @@ Automatically sets the **APOD** (NASA's Astronomy Picture of the Day) as your
   `@reboot`).
 - The script **retries** while waiting for the network to come up and, if it
   ultimately fails, keeps the current wallpaper instead of leaving a black screen.
-- On days when the APOD is a video → it uses the thumbnail.
+- Every download is checked to be a **real image** before being applied — an
+  HTTP 200 is not enough, since it may be a video or an error page, and handing
+  either to `gsettings` leaves you staring at GNOME's plain fallback background.
+- On days when the APOD is a video it uses the thumbnail; when there is no usable
+  thumbnail either (NASA only generates them for YouTube/Vimeo embeds, not for
+  self-hosted `.mp4`), it **walks back one day at a time** until it finds an APOD
+  that is an image.
 - It keeps only the last 10 images in `~/.local/share/apod-wallpaper/`.
 
 ## Requirements
 
 - Ubuntu / any distro running **GNOME**
-- `curl`, `jq`, `gsettings`, `systemd` (default on Ubuntu)
+- `curl`, `jq`, `file`, `gsettings`, `systemd` (default on Ubuntu)
 
 ## Installation
 
@@ -66,6 +72,7 @@ Environment variables supported by the script:
 | `APOD_DIR` | `~/.local/share/apod-wallpaper` | Where to store the images |
 | `APOD_RETRIES` | `30` | Attempts while waiting for the network |
 | `APOD_RETRY_DELAY` | `5` | Seconds between attempts |
+| `APOD_LOOKBACK` | `7` | How many days to walk back when the APOD has no usable image |
 
 ## License
 
