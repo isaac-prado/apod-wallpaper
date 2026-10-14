@@ -7,7 +7,7 @@ Automatically sets the **APOD** (NASA's Astronomy Picture of the Day) as your
 
 ## How it works
 
-- A Bash script downloads the day's APOD via the [NASA API](https://api.nasa.gov)
+- A Bash script downloads the day's APOD from NASA's [official APOD RSS feed](https://science.nasa.gov/feed/apod-basic/)
   and applies it to the wallpaper (both **light and dark** modes) using `gsettings`.
 - A **systemd user service** runs the script on graphical-session login
   (`graphical-session.target`) — the point at which the session DBus already
@@ -54,25 +54,19 @@ systemctl --user disable apod-wallpaper.service
 
 ## Configuration (optional)
 
-By default it uses NASA's `DEMO_KEY` (limit ~30 requests/hour — enough for
-login). To use your own free key (https://api.nasa.gov), edit
-`~/.config/systemd/user/apod-wallpaper.service` and uncomment:
-
-```ini
-Environment=APOD_API_KEY=YOUR_KEY_HERE
-```
-
-Then: `systemctl --user daemon-reload`.
+No API key is needed. (`api.nasa.gov/planetary/apod` currently returns the NASA logo
+instead of the picture — [nasa/apod-api#184](https://github.com/nasa/apod-api/issues/184) —
+so the feed is used instead.)
 
 Environment variables supported by the script:
 
 | Variable | Default | Description |
 |---|---|---|
-| `APOD_API_KEY` | `DEMO_KEY` | NASA API key |
 | `APOD_DIR` | `~/.local/share/apod-wallpaper` | Where to store the images |
 | `APOD_RETRIES` | `30` | Attempts while waiting for the network |
 | `APOD_RETRY_DELAY` | `5` | Seconds between attempts |
 | `APOD_LOOKBACK` | `7` | How many days to walk back when the APOD has no usable image |
+| `APOD_MIN_WIDTH` | `800` | Images narrower than this (px) are rejected |
 
 ## License
 

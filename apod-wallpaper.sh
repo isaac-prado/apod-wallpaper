@@ -9,13 +9,11 @@
 set -euo pipefail
 
 # ---- Configuração -----------------------------------------------------------
-# Pegue uma chave gratuita em https://api.nasa.gov (DEMO_KEY funciona, mas tem
-# limite baixo: ~30 req/hora). Defina APOD_API_KEY no service pra usar a sua.
-API_KEY="${APOD_API_KEY:-DEMO_KEY}"
 DEST_DIR="${APOD_DIR:-$HOME/.local/share/apod-wallpaper}"
 MAX_RETRIES="${APOD_RETRIES:-30}"    # tentativas aguardando internet
 RETRY_DELAY="${APOD_RETRY_DELAY:-5}" # segundos entre tentativas
 MAX_LOOKBACK="${APOD_LOOKBACK:-7}"   # dias pra trás quando a APOD de hoje é vídeo
+MIN_WIDTH="${APOD_MIN_WIDTH:-800}"   # abaixo disso não é foto
 # -----------------------------------------------------------------------------
 
 mkdir -p "$DEST_DIR"
@@ -23,34 +21,38 @@ mkdir -p "$DEST_DIR"
 # stdout viraria parte do valor de retorno. O journald captura os dois.
 log() { echo "[apod] $*" >&2; }
 
-# thumbs=true faz a API devolver thumbnail_url quando a APOD é um vídeo.
-API_BASE="https://api.nasa.gov/planetary/apod?api_key=${API_KEY}&thumbs=true"
+FEED_URL="https://science.nasa.gov/feed/apod-basic/"
 
-# Busca o JSON da APOD. $1: data YYYY-MM-DD (vazio = hoje).
-fetch_apod() {
-  local url="$API_BASE"
-  [ -n "${1:-}" ] && url="${url}&date=$1"
-  curl -fsS --max-time 20 "$url"
+# A API api.nasa.gov/planetary/apod devolve o logo da NASA no lugar da imagem
+# desde a migração do site (nasa/apod-api#184), então usamos o feed RSS oficial.
+
+# Lista "data|título|hdurl" de cada item do feed que tem imagem, do mais novo
+# pro mais antigo. Dias de vídeo vêm sem hdurl e são ignorados.
+parse_feed() {
+  awk '
+    /<item>/            { title = ""; date = ""; hd = "" }
+    /<title>/ && title == "" { title = $0; sub(/.*<title>/, "", title); sub(/<\/title>.*/, "", title) }
+    /<pubDate>/         { date = $0; sub(/.*<pubDate>/, "", date); sub(/<\/pubDate>.*/, "", date) }
+    /<apod:hdurl>/      { hd = $0; sub(/.*<apod:hdurl>/, "", hd); sub(/<\/apod:hdurl>.*/, "", hd) }
+    /<\/item>/          { if (hd != "") print date "|" title "|" hd }
+  ' | while IFS='|' read -r date title hd; do
+    printf '%s|%s|%s\n' "$(date -u -d "$date" +%F)" "$title" "${hd//&#038;/\&}"
+  done
 }
 
-# Baixa a primeira URL candidata que seja de fato uma imagem. $1: JSON da APOD.
+# Baixa a primeira URL candidata que seja de fato uma imagem grande. $1: data, $2: hdurl.
 # Ecoa o caminho do arquivo baixado; retorna != 0 se nenhuma candidata servir.
 download_image() {
-  local json="$1" date_str candidates img_url ext candidate_out mime
-  date_str="$(echo "$json" | jq -r '.date // ""')"
+  local date_str="$1" hdurl="$2" original img_url ext candidate_out mime width
+  # O hdurl passa por um redimensionador; o original em resolução total fica em
+  # /content/dam/ e vem sem query string.
+  original="${hdurl%%\?*}"
+  original="${original/\/dynamicimage\/assets\/science\//\/content\/dam\/science\/}"
 
-  # Ordem de preferência: alta resolução -> thumbnail (dias em que a APOD é
-  # vídeo) -> url normal. Não dá pra decidir só pelo media_type: quando o vídeo
-  # é um .mp4 hospedado na própria NASA (em vez de YouTube/Vimeo) a API devolve
-  # thumbnail_url vazio e .url é o próprio vídeo. Também há dias em que o hdurl
-  # está quebrado (404) e só a url normal funciona — por isso a cascata.
-  candidates="$(echo "$json" | jq -r '[.hdurl, .thumbnail_url, .url] | map(select(. != null and . != "")) | .[]')"
-
-  while IFS= read -r img_url; do
-    [ -n "$img_url" ] || continue
-    ext="${img_url##*.}"; ext="${ext%%\?*}"
+  for img_url in "$original" "$hdurl"; do
+    ext="${img_url%%\?*}"; ext="${ext##*.}"
     [ "${#ext}" -le 4 ] || ext="jpg"
-    candidate_out="$DEST_DIR/apod-${date_str:-latest}.${ext}"
+    candidate_out="$DEST_DIR/apod-${date_str}.${ext}"
 
     if ! curl -fsSL --max-time 120 -o "$candidate_out" "$img_url"; then
       rm -f "$candidate_out"
@@ -58,66 +60,57 @@ download_image() {
       continue
     fi
 
-    # HTTP 200 não significa imagem: pode ser um vídeo ou uma página de erro.
-    # Entregar isso pro gsettings deixa a área de trabalho no fundo liso padrão.
+    # HTTP 200 não significa imagem: pode ser uma página de erro. Entregar isso
+    # pro gsettings deixa a área de trabalho no fundo liso padrão.
     mime="$(file --mime-type -b "$candidate_out")"
-    case "$mime" in
-      image/*) echo "$candidate_out"; return 0 ;;
-    esac
+    # Em `file`, a densidade do JPEG (100x100) vem antes das dimensões: vale o último NxM.
+    width="$(file -b "$candidate_out" | grep -oE '[0-9]+ ?x ?[0-9]+' | tail -1 | sed 's/ \?x.*//')"
+    if [[ "$mime" == image/* ]] && [ "${width:-0}" -ge "$MIN_WIDTH" ]; then
+      echo "$candidate_out"; return 0
+    fi
     rm -f "$candidate_out"
-    log "não é imagem ($mime): $img_url"
-  done <<< "$candidates"
+    log "descartado ($mime, ${width:-?}px, mín. ${MIN_WIDTH}px): $img_url"
+  done
 
   return 1
 }
 
-# --- Aguarda a internet e busca o JSON da API --------------------------------
-json=""
+# --- Aguarda a internet e baixa o feed ---------------------------------------
+entries=""
 for i in $(seq 1 "$MAX_RETRIES"); do
-  if json="$(fetch_apod)" && [ -n "$json" ]; then
+  if feed="$(curl -fsS --max-time 20 "$FEED_URL")" && entries="$(parse_feed <<< "$feed")" && [ -n "$entries" ]; then
     break
   fi
-  log "sem resposta da API (tentativa $i/$MAX_RETRIES), aguardando ${RETRY_DELAY}s..."
+  entries=""
+  log "sem resposta do feed (tentativa $i/$MAX_RETRIES), aguardando ${RETRY_DELAY}s..."
   sleep "$RETRY_DELAY"
-  json=""
 done
 
-if [ -z "$json" ]; then
-  log "falhou: não consegui contatar a API da NASA. Mantendo wallpaper atual."
+if [ -z "$entries" ]; then
+  log "falhou: não consegui ler o feed da NASA. Mantendo wallpaper atual."
   exit 1
 fi
 
-# --- Pega a APOD de hoje; se não tiver imagem, volta um dia por vez ----------
-out=""
-for _ in $(seq 0 "$MAX_LOOKBACK"); do
-  if out="$(download_image "$json")"; then
+# --- Pega a APOD mais recente que tenha imagem utilizável --------------------
+out=""; count=0
+while IFS='|' read -r date_str title hdurl; do
+  [ "$count" -le "$MAX_LOOKBACK" ] || break
+  count=$((count + 1))
+  if out="$(download_image "$date_str" "$hdurl")"; then
     break
   fi
   out=""
-
-  day="$(echo "$json" | jq -r '.date // ""')"
-  [ -n "$day" ] || break
-  prev="$(date -u -d "$day - 1 day" +%F)"
-  log "APOD de $day não tem imagem utilizável; tentando $prev..."
-
-  if ! json="$(fetch_apod "$prev")" || [ -z "$json" ]; then
-    log "não consegui buscar a APOD de $prev."
-    json=""
-    break
-  fi
-done
+  log "APOD de $date_str não tem imagem utilizável; tentando a anterior..."
+done <<< "$entries"
 
 if [ -z "$out" ]; then
   log "falhou: nenhuma APOD com imagem nos últimos $MAX_LOOKBACK dias. Mantendo wallpaper atual."
   exit 1
 fi
 
-title="$(echo "$json" | jq -r '.title // "APOD"')"
-date_str="$(echo "$json" | jq -r '.date // ""')"
-
-# Salva metadados (título/data/explicação) para referência.
-echo "$json" | jq -r '{date, title, explanation, media_type, hdurl, url} ' \
-  > "$DEST_DIR/last.json" 2>/dev/null || true
+# Salva metadados para referência.
+jq -n --arg date "$date_str" --arg title "$title" --arg hdurl "$hdurl" \
+  '{date: $date, title: $title, hdurl: $hdurl}' > "$DEST_DIR/last.json" 2>/dev/null || true
 
 # --- Define o wallpaper (GNOME: claro + escuro) ------------------------------
 uri="file://$out"
