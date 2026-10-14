@@ -15,18 +15,18 @@ Automatically sets the **APOD** (NASA's Astronomy Picture of the Day) as your
   `@reboot`).
 - The script **retries** while waiting for the network to come up and, if it
   ultimately fails, keeps the current wallpaper instead of leaving a black screen.
-- Every download is checked to be a **real image** before being applied — an
-  HTTP 200 is not enough, since it may be a video or an error page, and handing
-  either to `gsettings` leaves you staring at GNOME's plain fallback background.
-- On days when the APOD is a video it uses the thumbnail; when there is no usable
-  thumbnail either (NASA only generates them for YouTube/Vimeo embeds, not for
-  self-hosted `.mp4`), it **walks back one day at a time** until it finds an APOD
-  that is an image.
+- Every download is checked to be a **real, full-size image** before being
+  applied — an HTTP 200 is not enough, since it may be an error page, and
+  handing that to `gsettings` leaves you staring at GNOME's plain fallback
+  background. Anything narrower than 800 px (e.g. a logo) is rejected too.
+- On days when the APOD is a video there is no picture to use, so it **walks back
+  one day at a time** until it finds an APOD that is an image.
 - It keeps only the last 10 images in `~/.local/share/apod-wallpaper/`.
 
 ## Requirements
 
-- Ubuntu / any distro running **GNOME**
+- Ubuntu / any distro running **GNOME** (other desktops, like KDE or XFCE, are
+  not supported)
 - `curl`, `jq`, `file`, `gsettings`, `systemd` (default on Ubuntu)
 
 ## Installation
@@ -37,7 +37,8 @@ cd apod-wallpaper
 ./install.sh
 ```
 
-From your next login on, the wallpaper becomes the APOD of the day.
+**No account or API key needed.** From your next login on, the wallpaper becomes
+the APOD of the day.
 
 ## Usage
 
@@ -54,11 +55,7 @@ systemctl --user disable apod-wallpaper.service
 
 ## Configuration (optional)
 
-No API key is needed. (`api.nasa.gov/planetary/apod` currently returns the NASA logo
-instead of the picture — [nasa/apod-api#184](https://github.com/nasa/apod-api/issues/184) —
-so the feed is used instead.)
-
-Environment variables supported by the script:
+The defaults work out of the box. These environment variables are supported by the script:
 
 | Variable | Default | Description |
 |---|---|---|
@@ -67,6 +64,21 @@ Environment variables supported by the script:
 | `APOD_RETRY_DELAY` | `5` | Seconds between attempts |
 | `APOD_LOOKBACK` | `7` | How many days to walk back when the APOD has no usable image |
 | `APOD_MIN_WIDTH` | `800` | Images narrower than this (px) are rejected |
+
+## Uninstall
+
+```bash
+systemctl --user disable --now apod-wallpaper.service
+rm ~/.local/bin/apod-wallpaper.sh ~/.config/systemd/user/apod-wallpaper.service
+rm -r ~/.local/share/apod-wallpaper
+systemctl --user daemon-reload
+```
+
+## Note
+
+NASA's `api.nasa.gov/planetary/apod` currently returns the NASA logo instead of
+the picture ([nasa/apod-api#184](https://github.com/nasa/apod-api/issues/184)),
+which is why this uses the official RSS feed instead — and why no API key is needed.
 
 ## License
 
